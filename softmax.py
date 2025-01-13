@@ -1,191 +1,288 @@
 """
-======================================================================
-    SOFTMAX (MULTICLASS LOGISTIC REGRESSION) FOR FACIAL EXPRESSION
-======================================================================
+softmax.py
 
-ADDED:
-  - A second summary block that evaluates train, val, (and test if exists)
-    altogether, printing accuracy, precision, recall for each set.
+PURPOSE:
+  - Train a single-layer softmax (linear) model for 7-class facial expression classification.
+  - Reads train_data.pt, val_data.pt from 'processed_data/' for training/validation.
+  - If test_data.pt is present, it also evaluates on the test set; otherwise it skips that step.
+  - Logs train & val losses each epoch, plots them, then saves final weights to 'results/softmax_model.pth'.
+  - Finally, prints a Validation Classification Report at the end for the val set.
 
-NOTE:
-  - We do not alter existing code; we only add new lines at the end.
+HOW TO RUN:
+  python softmax.py
+
+REQUIREMENTS:
+  - PyTorch, NumPy, Matplotlib
+  - scikit-learn (for classification_report)
+  - processed_data/train_data.pt, processed_data/val_data.pt (required)
+  - processed_data/test_data.pt (optional, if you want final test evaluation).
 """
 
 import os
+import warnings
 import torch
-import numpy as np
 import torch.nn as nn
 import torch.optim as optim
 import matplotlib.pyplot as plt
-from sklearn.metrics import classification_report, accuracy_score, precision_score, recall_score
-from torch.utils.data import TensorDataset, DataLoader
+from torch.utils.data import DataLoader, TensorDataset
 
-class SoftmaxRegression(nn.Module):
-    def __init__(self, input_dim, num_classes):
-        super(SoftmaxRegression, self).__init__()
+# For printing a classification report
+from sklearn.metrics import classification_report
+
+##############################################################################
+# SUPPRESS FUTUREWARNING ABOUT "weights_only=False" FROM TORCH.LOAD
+##############################################################################
+warnings.filterwarnings(
+    "ignore",
+    message="You are using `torch.load` with `weights_only=False`"
+)
+
+##############################################################################
+# 1) SOFTMAX MODEL DEFINITION
+##############################################################################
+class SoftmaxClassifier(nn.Module):
+    """
+    A simple linear model for multi-class classification:
+      - Input dimension: 48*48 = 2304 (flattened grayscale image).
+      - Output dimension: 7 (classes).
+    CrossEntropyLoss automatically applies softmax internally.
+    """
+    def __init__(self, input_dim=48*48, num_classes=7):
+        super().__init__()
         self.linear = nn.Linear(input_dim, num_classes)
 
     def forward(self, x):
-        return self.linear(x)
+        """
+        x shape: (N,1,48,48).
+        Flatten => shape (N,2304) => linear => shape (N,7).
+        """
+        batch_size = x.size(0)
+        x = x.view(batch_size, -1)   # flatten (1,48,48)->(1,2304)
+        logits = self.linear(x)
+        return logits
 
-def flatten_images(images):
-    N = images.shape[0]
-    return images.view(N, -1)
-
-def train_model(model, loader, criterion, optimizer):
+##############################################################################
+# 2) TRAIN & VALIDATION FUNCTIONS
+##############################################################################
+def train_one_epoch(model, loader, criterion, optimizer):
+    """
+    Train the model for ONE epoch using 'loader'.
+    Returns average train loss for that epoch.
+    """
     model.train()
     total_loss = 0.0
-    for data, targets in loader:
+    total_samples = 0
+
+    for images, labels in loader:
         optimizer.zero_grad()
-        outputs = model(data)
-        loss = criterion(outputs, targets)
+        outputs = model(images)            # forward pass
+        loss = criterion(outputs, labels)  # cross-entropy
         loss.backward()
         optimizer.step()
-        total_loss += loss.item() * data.size(0)
-    return total_loss / len(loader.dataset)
 
-def validate_model(model, loader, criterion):
+        batch_size = images.size(0)
+        total_loss += loss.item() * batch_size
+        total_samples += batch_size
+
+    avg_loss = total_loss / total_samples
+    return avg_loss
+
+@torch.no_grad()
+def validate_one_epoch(model, loader, criterion):
+    """
+    Evaluate model on 'loader'.
+    Returns average validation loss.
+    """
     model.eval()
     total_loss = 0.0
+    total_samples = 0
+
+    for images, labels in loader:
+        outputs = model(images)
+        loss = criterion(outputs, labels)
+        batch_size = images.size(0)
+        total_loss += loss.item() * batch_size
+        total_samples += batch_size
+
+    avg_loss = total_loss / total_samples
+    return avg_loss
+
+##############################################################################
+# 3) CLASSIFICATION REPORT ON VAL SET
+##############################################################################
+@torch.no_grad()
+def print_val_classification_report(model, loader, num_classes=7):
+    """
+    Generate a classification report for the entire validation set.
+    We'll gather all predictions, gather all ground-truth,
+    then use sklearn.metrics.classification_report to display
+    precision/recall/f1 for each class + overall stats.
+
+    :param model: trained Softmax model
+    :param loader: validation DataLoader
+    :param num_classes: number of classes (default=7)
+    :return: prints the classification report, returns final accuracy as float
+    """
+    model.eval()
     all_preds = []
-    all_targets = []
+    all_labels = []
 
-    with torch.no_grad():
-        for data, targets in loader:
-            outputs = model(data)
-            loss = criterion(outputs, targets)
-            total_loss += loss.item() * data.size(0)
+    for images, labels in loader:
+        outputs = model(images)
+        preds = torch.argmax(outputs, dim=1)
+        all_preds.append(preds)
+        all_labels.append(labels)
 
-            preds = torch.argmax(outputs, dim=1)
-            all_preds.append(preds.cpu().numpy())
-            all_targets.append(targets.cpu().numpy())
+    # Combine all predictions, labels
+    all_preds  = torch.cat(all_preds)
+    all_labels = torch.cat(all_labels)
 
-    val_loss = total_loss / len(loader.dataset)
-    all_preds = np.concatenate(all_preds)
-    all_targets = np.concatenate(all_targets)
-    return val_loss, all_preds, all_targets
+    # Compute classification report
+    # By default, classification_report shows numeric labels.
+    # You can define label names if you have them.
+    report = classification_report(
+        all_labels.cpu().numpy(),
+        all_preds.cpu().numpy(),
+        labels=list(range(num_classes)),  # e.g., 0..6
+        digits=3
+    )
 
-def main():
-    print("======================================================================")
-    print("    SOFTMAX (MULTICLASS LOGISTIC REGRESSION) FOR FACIAL EXPRESSION    ")
-    print("======================================================================\n")
-
-    os.makedirs("results", exist_ok=True)
-    train_path = "processed_data/train_data.pt"
-    val_path   = "processed_data/val_data.pt"
-    test_path  = "processed_data/test_data.pt"
-
-    if not os.path.exists(train_path) or not os.path.exists(val_path):
-        print("[Error] Processed train/val data not found. Run dataset_preparation.py first.")
-        return
-
-    train_images, train_labels, label_to_idx = torch.load(train_path, weights_only=False)
-    val_images,   val_labels,   _            = torch.load(val_path,   weights_only=False)
-
-    print("[Info] Train set size:", train_labels.size(0))
-    print("[Info] Val set size:  ", val_labels.size(0), "\n")
-
-    train_images_flat = flatten_images(train_images)
-    val_images_flat   = flatten_images(val_images)
-
-    train_dataset = TensorDataset(train_images_flat, train_labels)
-    val_dataset   = TensorDataset(val_images_flat,   val_labels)
-
-    train_loader = DataLoader(train_dataset, batch_size=64, shuffle=True)
-    val_loader   = DataLoader(val_dataset,   batch_size=64, shuffle=False)
-
-    input_dim   = train_images_flat.shape[1]  # 2304
-    num_classes = len(label_to_idx)
-    learning_rate = 0.01
-    num_epochs    = 10
-
-    model     = SoftmaxRegression(input_dim, num_classes)
-    criterion = nn.CrossEntropyLoss()
-    optimizer = optim.SGD(model.parameters(), lr=learning_rate)
-
-    train_losses = []
-    val_losses   = []
-
-    print("[Info] Starting training...\n")
-
-    for epoch in range(num_epochs):
-        train_loss = train_model(model, train_loader, criterion, optimizer)
-        val_loss, val_preds, val_targets = validate_model(model, val_loader, criterion)
-
-        train_losses.append(train_loss)
-        val_losses.append(val_loss)
-
-        print(f"Epoch [{epoch+1}/{num_epochs}] -> Train Loss: {train_loss:.4f}, Val Loss: {val_loss:.4f}")
-
-    val_accuracy = accuracy_score(val_targets, val_preds)
-    report = classification_report(val_targets, val_preds, target_names=label_to_idx.keys())
+    # Compute overall accuracy
+    correct_count = (all_preds == all_labels).sum().item()
+    total_count   = all_labels.size(0)
+    final_accuracy = correct_count / total_count if total_count > 0 else 0.0
 
     print("\n===============================")
     print(" Validation Classification Report:")
     print("===============================")
     print(report)
-    print(f"[Summary] Final Validation Accuracy: {val_accuracy*100:.2f}%\n")
+    print(f"[Summary] Final Validation Accuracy: {final_accuracy*100:.2f}%\n")
 
-    # Save results
-    results_file = "results/softmax_results.txt"
-    with open(results_file, "w") as f:
-        f.write(f"Final Accuracy: {val_accuracy:.4f}\n")
-        f.write(f"Classification Report:\n{report}\n")
-    print(f"[Info] Results saved to '{results_file}' for later comparison.\n")
+    return final_accuracy
 
-    print("Plotting the training/validation loss curves...\n")
-    plt.figure(figsize=(8,5))
-    plt.plot(range(1, num_epochs+1), train_losses, label='Train Loss', marker='o')
-    plt.plot(range(1, num_epochs+1), val_losses,   label='Val Loss',   marker='s')
-    plt.xlabel('Epoch')
-    plt.ylabel('Loss')
-    plt.title('Softmax Regression Training')
+##############################################################################
+# 4) MAIN TRAINING/TEST + PLOTTING
+##############################################################################
+def main():
+    """
+    Steps:
+      1) Confirm train_data.pt, val_data.pt exist.
+      2) Load them, create DataLoaders.
+      3) Build SoftmaxClassifier, define CrossEntropy, optimizer=SGD.
+      4) For each epoch: train_one_epoch + validate_one_epoch => track losses.
+      5) Plot final losses, save model.
+      6) (Optional) Evaluate on test_data.pt if available.
+      7) Print a classification report on the validation set.
+    """
+    # File paths
+    train_path = "processed_data/train_data.pt"
+    val_path   = "processed_data/val_data.pt"
+    test_path  = "processed_data/test_data.pt"
+
+    # Check existence
+    if not (os.path.exists(train_path) and os.path.exists(val_path)):
+        print("[Error] Missing train_data.pt or val_data.pt in 'processed_data/'. Exiting.")
+        return
+
+    # 1) Load data
+    print("[Info] Loading train/val data from .pt files...")
+    train_images, train_labels, label_to_idx = torch.load(train_path)
+    val_images,   val_labels,   _            = torch.load(val_path)
+
+    # Build datasets, loaders
+    train_ds = TensorDataset(train_images, train_labels)
+    val_ds   = TensorDataset(val_images,   val_labels)
+
+    batch_size = 64
+    train_loader = DataLoader(train_ds, batch_size=batch_size, shuffle=True)
+    val_loader   = DataLoader(val_ds,   batch_size=batch_size*2)
+
+    print(f"[Info] train_ds={len(train_ds)}, val_ds={len(val_ds)}")
+    print(f"[Info] Train batch_size={batch_size}, Val batch_size={batch_size*2}")
+
+    # 2) Create Softmax model
+    input_dim = 48*48  # flatten grayscale 48x48
+    num_classes = len(label_to_idx)  # typically 7
+    model_softmax = SoftmaxClassifier(input_dim=input_dim, num_classes=num_classes)
+    print("[Info] Created SoftmaxClassifier with single linear layer.")
+
+    # 3) Define loss & optimizer
+    lr = 0.01
+    criterion = nn.CrossEntropyLoss()
+    optimizer = optim.SGD(model_softmax.parameters(), lr=lr)
+    print(f"[Info] Using CrossEntropyLoss + SGD(lr={lr})")
+
+    # 4) Training loop
+    epochs = 10
+    train_losses = []
+    val_losses   = []
+
+    print("[Info] Starting training...\n")
+    for epoch in range(epochs):
+        # train
+        train_loss = train_one_epoch(model_softmax, train_loader, criterion, optimizer)
+        # validate
+        val_loss   = validate_one_epoch(model_softmax, val_loader, criterion)
+
+        train_losses.append(train_loss)
+        val_losses.append(val_loss)
+
+        print(f"Epoch [{epoch+1}/{epochs}] => "
+              f"Train Loss: {train_loss:.4f}, "
+              f"Val Loss: {val_loss:.4f}")
+
+    print("\n[Info] Training completed. Plotting losses...")
+
+    # 5) Plot train vs val losses
+    import matplotlib.pyplot as plt
+    plt.figure()
+    plt.plot(range(1,epochs+1), train_losses, marker='o', label='Train Loss')
+    plt.plot(range(1,epochs+1), val_losses,   marker='s', label='Val Loss')
+    plt.title("Softmax Training vs Validation Loss")
+    plt.xlabel("Epoch")
+    plt.ylabel("Loss")
     plt.legend()
     plt.grid(True)
     plt.show()
 
-    print("[Info] Softmax training completed.\n")
+    # Save final model
+    os.makedirs("results", exist_ok=True)
+    model_path = "results/softmax_model.pth"
+    torch.save(model_softmax.state_dict(), model_path)
+    print(f"[Info] Model weights saved to '{model_path}'")
 
-    # -------------------------------------------------------------------
-    # ADDITIONAL SUMMARY BLOCK: Evaluate on train, val, test for P/R/A
-    # -------------------------------------------------------------------
-    print("------------------------------------------------------------")
-    print("ADDITIONAL SUMMARY: SOFTMAX EVALUATION ON TRAIN, VAL, TEST")
-    print("------------------------------------------------------------\n")
-
-    # We'll define a helper to get predictions & metrics:
-    def get_predictions_and_metrics(model, images, labels):
-        model.eval()
-        with torch.no_grad():
-            outputs = model(images)
-            preds = torch.argmax(outputs, dim=1)
-        y_true = labels.numpy()
-        y_pred = preds.numpy()
-        acc = accuracy_score(y_true, y_pred)
-        prec = precision_score(y_true, y_pred, average=None, zero_division=0)
-        rec = recall_score(y_true, y_pred, average=None, zero_division=0)
-        return acc, prec, rec
-
-    # Evaluate on train set
-    train_acc, train_prec, train_rec = get_predictions_and_metrics(model, train_images_flat, train_labels)
-    print(f"Train Set -> Accuracy: {train_acc*100:.2f}%")
-
-    # Evaluate on val set
-    val_acc, val_prec, val_rec = get_predictions_and_metrics(model, val_images_flat, val_labels)
-    print(f"Val   Set -> Accuracy: {val_acc*100:.2f}%")
-
-    # Evaluate on test set if it exists
+    # 6) Optional test set
     if os.path.exists(test_path):
-        # Load test
-        test_images, test_labels, _ = torch.load(test_path, weights_only=False)
-        test_images_flat = flatten_images(test_images)
-        test_acc, _, _ = get_predictions_and_metrics(model, test_images_flat, test_labels)
-        print(f"Test  Set -> Accuracy: {test_acc*100:.2f}%")
-    else:
-        print("[Info] No test set found, skipping test metrics.")
+        print("\n[Info] Found test_data.pt. Evaluating on test set now.")
+        test_images, test_labels, _ = torch.load(test_path)
+        test_ds = TensorDataset(test_images, test_labels)
+        test_loader = DataLoader(test_ds, batch_size=batch_size*2)
 
-    print("\nPrecision and Recall arrays are also computed. You can print them out if needed.")
-    print("End of additional summary.\n")
+        # test loss
+        test_loss = validate_one_epoch(model_softmax, test_loader, criterion)
+        print(f"[Test] Loss: {test_loss:.4f}")
+
+        # compute test accuracy
+        correct = 0
+        total   = 0
+        model_softmax.eval()
+        with torch.no_grad():
+            for imgs, labs in test_loader:
+                outputs = model_softmax(imgs)
+                preds = torch.argmax(outputs, dim=1)
+                correct += (preds == labs).sum().item()
+                total   += labs.size(0)
+        test_acc = correct / total if total else 0
+        print(f"[Test] Accuracy: {test_acc:.4f}")
+    else:
+        print("\n[Warning] test_data.pt not found, skipping test evaluation.")
+
+    # 7) Print classification report on the validation set
+    #    (We do this after training is complete.)
+    print_val_classification_report(model_softmax, val_loader, num_classes=num_classes)
+
+    print("[Info] Done. The Softmax classifier is fully trained if test set was available.")
+
 
 if __name__ == "__main__":
     main()

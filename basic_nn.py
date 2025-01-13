@@ -133,7 +133,7 @@ def main():
     criterion = nn.CrossEntropyLoss()  # or add weight=weights if using class weighting
     optimizer = optim.Adam(model.parameters(), lr=0.001)
 
-    num_epochs = 10
+    num_epochs = 20
     train_losses = []
     val_losses = []
 

@@ -2,306 +2,354 @@
 advanced_network.py
 
 PURPOSE:
-  - Implements an Advanced Convolutional Neural Network (CNN) for Facial Expression Recognition.
-  - Uses Weighted Cross Entropy for class imbalance, Dropout for overfitting reduction,
-    StepLR scheduler, and Early Stopping.
+  - Demonstrates an advanced Convolutional Neural Network (CNN) architecture
+    for 7-class facial expression recognition using PyTorch.
+  - The architecture includes multiple Convolution + BatchNorm + ReLU + MaxPool + Dropout blocks,
+    followed by flattening and two fully-connected layers with additional dropout.
+  - Outputs standard training logs (epoch-based) and final accuracy on the
+    entire training and validation sets.
+  - Saves final weights to 'results/advanced_model.pth' so that a similarly
+    defined model in live_inference.py can be used for real-time classification.
+
+REQUIREMENTS:
+  - PyTorch, NumPy, Matplotlib
+  - 'processed_data/train_data.pt' and 'processed_data/val_data.pt' containing:
+      (images_tensor, labels_tensor, label_to_idx).
+    Each image: shape (N,1,48,48), each label: shape (N,).
+    7 classes in total.
+  - Optional: 'processed_data/test_data.pt' if you want further testing (not done here).
 
 HOW TO RUN:
-  1) Place train_data.pt and val_data.pt in processed_data/ (optional: test_data.pt as well).
-  2) Run: python advanced_network.py
-  3) Check "results/advanced_network_results.txt" for final metrics.
-  4) A final trained model is saved to "results/advanced_model.pth" for live inference.
-
-NOTES:
-  - This script runs on CPU by default (no GPU checks).
-  - Data augmentation is not forced here (can be done offline if desired).
-  - Weighted Cross Entropy helps address class imbalance. Adjust 'weights' to match your dataset distribution.
+  python advanced_network.py
 """
 
 import os
+import warnings
 import torch
 import torch.nn as nn
-import torch.optim as optim
-import numpy as np
+import torch.nn.functional as F
 import matplotlib.pyplot as plt
-from torch.utils.data import DataLoader, TensorDataset
-from sklearn.metrics import classification_report, accuracy_score, precision_score, recall_score
+from torch.utils.data import TensorDataset, DataLoader
+from sklearn.metrics import accuracy_score
 
 ##############################################################################
-#                           CNN ARCHITECTURE                                 #
+# 0) SUPPRESS WARNINGS ABOUT torch.load (weights_only=False)
 ##############################################################################
-class AdvancedCNN(nn.Module):
+warnings.filterwarnings(
+    "ignore",
+    message="You are using `torch.load` with `weights_only=False`",
+    category=FutureWarning
+)
+
+##############################################################################
+# 1) HELPER FUNCTIONS AND BASE CLASSES
+##############################################################################
+
+def compute_accuracy(batch_outputs, batch_labels):
     """
-    A deeper CNN with three convolutional layers, each followed by a pooling operation.
-    Includes dropout to reduce overfitting, then two fully-connected layers for the final classification.
+    Compute classification accuracy for a single batch.
+    :param batch_outputs: shape (batch_size, num_classes)
+    :param batch_labels: shape (batch_size)
+    :return: torch scalar in [0..1] representing fraction of correct predictions
     """
-    def __init__(self, num_classes=7):
-        super(AdvancedCNN, self).__init__()
-        # 1st block: conv -> ReLU -> pool
-        self.conv1 = nn.Conv2d(in_channels=1, out_channels=32, kernel_size=3, padding=1)
-        self.pool1 = nn.MaxPool2d(kernel_size=2, stride=2)
+    _, predicted_indices = torch.max(batch_outputs, dim=1)
+    correct_count = (predicted_indices == batch_labels).sum().item()
+    accuracy_fraction = correct_count / len(batch_labels)
+    return torch.tensor(accuracy_fraction)
 
-        # 2nd block: conv -> ReLU -> pool
-        self.conv2 = nn.Conv2d(32, 64, kernel_size=3, padding=1)
-        self.pool2 = nn.MaxPool2d(kernel_size=2, stride=2)
 
-        # 3rd block: conv -> ReLU -> pool
-        self.conv3 = nn.Conv2d(64, 128, kernel_size=3, padding=1)
-        self.pool3 = nn.MaxPool2d(kernel_size=2, stride=2)
+class CNNTrainingBase(nn.Module):
+    """
+    A base class that defines standard methods for training and validation steps.
+    This helps keep code organized.
+    """
 
-        # Dropout to reduce overfitting
-        self.dropout = nn.Dropout(p=0.4)
+    def training_step(self, batch):
+        """
+        One forward pass + cross-entropy for a training batch.
+        The result is the training loss (a scalar).
+        """
+        images, labels = batch
+        model_outputs = self(images)
+        loss = F.cross_entropy(model_outputs, labels)
+        return loss
 
-        # After 3 pools, 48x48 => 6x6. Flatten dimension = 128 * 6 * 6 = 4608
-        self.fc1 = nn.Linear(128 * 6 * 6, 512)
-        self.fc2 = nn.Linear(512, num_classes)
+    def validation_step(self, batch):
+        """
+        Returns a dict for each validation batch:
+           {'val_loss': <loss>, 'val_acc': <accuracy>}
+        We'll combine these in validation_epoch_end.
+        """
+        images, labels = batch
+        model_outputs = self(images)
+        loss = F.cross_entropy(model_outputs, labels)
+        acc  = compute_accuracy(model_outputs, labels)
+        return {'val_loss': loss.detach(), 'val_acc': acc}
+
+    def validation_epoch_end(self, batch_outputs):
+        """
+        Combine the results from all val batches:
+        we average val_loss and val_acc across the entire val set.
+        """
+        losses = [x['val_loss'] for x in batch_outputs]
+        val_loss_avg = torch.stack(losses).mean()
+        accs   = [x['val_acc'] for x in batch_outputs]
+        val_acc_avg  = torch.stack(accs).mean()
+        return {'val_loss': val_loss_avg.item(), 'val_acc': val_acc_avg.item()}
+
+    def epoch_end(self, epoch_idx, epoch_result):
+        """
+        Print a summary line: train_loss, val_loss, val_acc
+        """
+        print(f"Epoch [{epoch_idx+1}], "
+              f"train_loss: {epoch_result['train_loss']:.4f}, "
+              f"val_loss: {epoch_result['val_loss']:.4f}, "
+              f"val_acc: {epoch_result['val_acc']:.4f}")
+
+##############################################################################
+# 2) ADVANCED CNN MODEL
+##############################################################################
+class AdvancedEmotionCNN(CNNTrainingBase):
+    """
+    An advanced CNN architecture for 7-class classification (facial expressions).
+    The structure:
+
+    -- 1st block:
+         Conv2d(1->64, kernel_size=5, padding=2),
+         BN(64), ReLU, MaxPool(2,2), Dropout(0.25)
+    -- 2nd block:
+         Conv2d(64->128, kernel_size=3, padding=1),
+         BN(128), ReLU, MaxPool(2,2), Dropout(0.25)
+    -- 3rd block:
+         Conv2d(128->512, kernel_size=3, padding=1),
+         BN(512), ReLU, MaxPool(2,2), Dropout(0.25)
+    -- 4th block:
+         Conv2d(512->512, kernel_size=3, padding=1),
+         BN(512), ReLU, MaxPool(2,2), Dropout(0.25)
+    -- Flatten => shape (512*3*3 = 4608)
+    -- FC1: (4608->256), BN(256), ReLU, Dropout(0.25)
+    -- FC2: (256->512), BN(512), ReLU, Dropout(0.25)
+    -- final: (512->7)
+    """
+    def __init__(self):
+        super().__init__()
+        self.network = nn.Sequential(
+            # block 1 => kernel=5 for the first conv
+            nn.Conv2d(in_channels=1, out_channels=64, kernel_size=5, padding=2),
+            nn.BatchNorm2d(64),
+            nn.ReLU(inplace=True),
+            nn.MaxPool2d(2,2),
+            nn.Dropout(0.25),
+
+            # block 2 => kernel=3
+            nn.Conv2d(64, 128, kernel_size=3, padding=1),
+            nn.BatchNorm2d(128),
+            nn.ReLU(inplace=True),
+            nn.MaxPool2d(2,2),
+            nn.Dropout(0.25),
+
+            # block 3 => kernel=3
+            nn.Conv2d(128, 512, kernel_size=3, padding=1),
+            nn.BatchNorm2d(512),
+            nn.ReLU(inplace=True),
+            nn.MaxPool2d(2,2),
+            nn.Dropout(0.25),
+
+            # block 4 => kernel=3
+            nn.Conv2d(512, 512, kernel_size=3, padding=1),
+            nn.BatchNorm2d(512),
+            nn.ReLU(inplace=True),
+            nn.MaxPool2d(2,2),
+            nn.Dropout(0.25),
+
+            # flatten
+            nn.Flatten(),
+
+            # FC1 => (4608->256)
+            nn.Linear(512*3*3, 256),
+            nn.BatchNorm1d(256),
+            nn.ReLU(inplace=True),
+            nn.Dropout(0.25),
+
+            # FC2 => (256->512)
+            nn.Linear(256, 512),
+            nn.BatchNorm1d(512),
+            nn.ReLU(inplace=True),
+            nn.Dropout(0.25),
+
+            # Output => 7 classes
+            nn.Linear(512, 7)
+        )
 
     def forward(self, x):
-        x = self.pool1(torch.relu(self.conv1(x)))
-        x = self.pool2(torch.relu(self.conv2(x)))
-        x = self.pool3(torch.relu(self.conv3(x)))
+        return self.network(x)
 
-        # Flatten
-        x = x.view(x.size(0), -1)
-
-        # Dropout then fully-connected
-        x = self.dropout(x)
-        x = torch.relu(self.fc1(x))
-        x = self.fc2(x)
-        return x
 
 ##############################################################################
-#                    TRAINING & VALIDATION HELPER FUNCTIONS                  #
+# 3) TRAIN/EVAL LOOPS
 ##############################################################################
-def train_model(model, loader, criterion, optimizer):
+@torch.no_grad()
+def evaluate_model(model, data_loader):
     """
-    Train the model for one epoch.
-    Returns: average training loss
-    """
-    model.train()
-    total_loss = 0.0
-    for data, targets in loader:
-        outputs = model(data)
-        loss = criterion(outputs, targets)
-
-        optimizer.zero_grad()
-        loss.backward()
-        optimizer.step()
-
-        total_loss += loss.item() * data.size(0)
-
-    return total_loss / len(loader.dataset)
-
-def validate_model(model, loader, criterion):
-    """
-    Validate the model on a given loader.
-    Returns: (val_loss, all_preds, all_targets)
+    Evaluate the model on the entire data_loader, computing average val_loss & val_acc.
+    Returns a dict: {'val_loss', 'val_acc'}.
     """
     model.eval()
-    total_loss = 0.0
-    all_preds = []
-    all_targets = []
+    all_outputs = []
+    for batch in data_loader:
+        step_out = model.validation_step(batch)
+        all_outputs.append(step_out)
+    return model.validation_epoch_end(all_outputs)
 
-    with torch.no_grad():
-        for data, targets in loader:
-            outputs = model(data)
-            loss = criterion(outputs, targets)
-            total_loss += loss.item() * data.size(0)
+def train_model(num_epochs, learning_rate, model, train_loader, val_loader, optimizer_func=torch.optim.SGD):
+    """
+    Train the model for 'num_epochs', logging each epoch's train_loss, val_loss, val_acc.
+    Returns 'history': a list of dicts with {'train_loss', 'val_loss', 'val_acc'}.
+    """
+    history = []
+    optimizer = optimizer_func(model.parameters(), lr=learning_rate)
 
-            preds = torch.argmax(outputs, dim=1)
-            all_preds.append(preds.numpy())
-            all_targets.append(targets.numpy())
+    for epoch_i in range(num_epochs):
+        # training phase
+        model.train()
+        train_losses_this_epoch = []
+        for batch in train_loader:
+            loss = model.training_step(batch)
+            train_losses_this_epoch.append(loss)
+            loss.backward()
+            optimizer.step()
+            optimizer.zero_grad()
 
-    val_loss = total_loss / len(loader.dataset)
-    all_preds = np.concatenate(all_preds)
-    all_targets = np.concatenate(all_targets)
-    return val_loss, all_preds, all_targets
+        # validation phase
+        val_results = evaluate_model(model, val_loader)
+        avg_train_loss = torch.stack(train_losses_this_epoch).mean().item()
+        val_results['train_loss'] = avg_train_loss
+
+        # log
+        model.epoch_end(epoch_i, val_results)
+        history.append(val_results)
+
+    return history
+
 
 ##############################################################################
-#                            MAIN FUNCTION                                   #
+# 4) PLOTTING
 ##############################################################################
-def main():
-    print("====================================================================")
-    print("   ADVANCED NETWORK (DEEP CNN) FOR FACIAL EXPRESSION RECOGNITION     ")
-    print("====================================================================\n")
+def plot_validation_accuracy(history):
+    """
+    Plot the val_acc across epochs from 'history'.
+    'history' is a list of dicts, each containing 'val_acc', 'val_loss', 'train_loss'.
+    """
+    accuracies = [h['val_acc'] for h in history]
+    plt.figure()
+    plt.plot(accuracies, '-x')
+    plt.title("Validation Accuracy vs. Epochs")
+    plt.xlabel("Epoch")
+    plt.ylabel("Accuracy")
+    plt.grid(True)
+    plt.show()
 
-    # Make output directory
-    os.makedirs("results", exist_ok=True)
+def plot_train_vs_val_loss(history):
+    """
+    Plot training vs validation loss across epochs from 'history'.
+    """
+    train_losses = [h['train_loss'] for h in history]
+    val_losses   = [h['val_loss']   for h in history]
 
-    # .pt file paths
-    train_path = "processed_data/train_data.pt"
-    val_path   = "processed_data/val_data.pt"
-    test_path  = "processed_data/test_data.pt"  # optional
-
-    # Check if train/val data exist
-    if not (os.path.exists(train_path) and os.path.exists(val_path)):
-        print("[Error] Train/Val data not found. Stopping.")
-        return
-
-    # Weighted Cross Entropy for class imbalance
-    # (Adjust these weights as needed for your data)
-    weights = torch.tensor([1.0, 5.0, 2.0, 1.0, 1.5, 1.0, 1.0])
-    criterion = nn.CrossEntropyLoss(weight=weights)
-
-    # Load data
-    # NOTE: We accept the default 'weights_only=False', trusting local .pt files
-    train_images, train_labels, label_to_idx = torch.load(train_path, weights_only=False)
-    val_images, val_labels, _                = torch.load(val_path,   weights_only=False)
-
-    test_images, test_labels = None, None
-    if os.path.exists(test_path):
-        test_images, test_labels, _ = torch.load(test_path, weights_only=False)
-
-    # Dataset info
-    print(f"[Info] Train set size: {train_labels.size(0)}")
-    print(f"[Info] Val set size:   {val_labels.size(0)}")
-    if test_images is not None:
-        print(f"[Info] Test set size:  {test_labels.size(0)}")
-    print("")
-
-    # Create Datasets and Loaders
-    train_dataset = TensorDataset(train_images, train_labels)
-    val_dataset   = TensorDataset(val_images,   val_labels)
-
-    train_loader = DataLoader(train_dataset, batch_size=64, shuffle=True)
-    val_loader   = DataLoader(val_dataset,   batch_size=64, shuffle=False)
-
-    test_loader = None
-    if test_images is not None:
-        test_dataset = TensorDataset(test_images, test_labels)
-        test_loader  = DataLoader(test_dataset, batch_size=64, shuffle=False)
-
-    # Initialize model
-    model = AdvancedCNN(num_classes=len(label_to_idx))
-
-    # Optimizer + StepLR
-    optimizer = optim.Adam(model.parameters(), lr=0.001, weight_decay=1e-4)
-    scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=5, gamma=0.1)
-
-    # Training config
-    num_epochs = 10
-    train_losses = []
-    val_losses   = []
-
-    # Early stopping
-    best_val_loss = float('inf')
-    patience = 3
-    patience_count = 0
-    best_model_state = None
-
-    print("[Info] Starting CNN training...\n")
-    for epoch in range(num_epochs):
-        # Train
-        train_loss = train_model(model, train_loader, criterion, optimizer)
-
-        # Validate
-        val_loss, val_preds, val_targets = validate_model(model, val_loader, criterion)
-
-        train_losses.append(train_loss)
-        val_losses.append(val_loss)
-
-        print(f"Epoch {epoch+1}/{num_epochs} -> Train Loss: {train_loss:.4f}, Val Loss: {val_loss:.4f}")
-
-        # LR scheduling step
-        scheduler.step()
-
-        # Early stopping check
-        if val_loss < best_val_loss:
-            best_val_loss = val_loss
-            patience_count= 0
-            best_model_state = model.state_dict()
-        else:
-            patience_count += 1
-            if patience_count >= patience:
-                print("[Info] Early stopping triggered.")
-                break
-
-    # Restore best model if available
-    if best_model_state is not None:
-        model.load_state_dict(best_model_state)
-
-    # Final validation metrics
-    _, val_preds, val_targets = validate_model(model, val_loader, criterion)
-    val_accuracy = accuracy_score(val_targets, val_preds)
-    report_val = classification_report(val_targets, val_preds, target_names=label_to_idx.keys(), zero_division=0)
-
-    print("\n===================================================")
-    print("  Validation Classification Report (Advanced CNN): ")
-    print("===================================================")
-    print(report_val)
-    print(f"[Summary] Validation Accuracy: {val_accuracy*100:.2f}%")
-
-    # Optional: Evaluate on test set
-    if test_loader is not None:
-        _, test_preds, test_targets = validate_model(model, test_loader, criterion)
-        test_accuracy = accuracy_score(test_targets, test_preds)
-        report_test   = classification_report(test_targets, test_preds, target_names=label_to_idx.keys(), zero_division=0)
-
-        print("---------------------------------------------------")
-        print(f"[Info] Final Test Accuracy: {test_accuracy*100:.2f}%")
-        print("  Test Classification Report:")
-        print("---------------------------------------------------")
-        print(report_test)
-    else:
-        print("\n[Warning] No test set found, skipping final test evaluation.")
-
-    # Save results to file
-    results_file = "results/advanced_network_results.txt"
-    with open(results_file, "w") as f:
-        f.write(f"Validation Accuracy: {val_accuracy:.4f}\n")
-        f.write("Validation Classification Report:\n")
-        f.write(report_val)
-    print(f"\n[Info] Results saved to '{results_file}'.\n")
-
-    # Save the trained model for live inference
-    model_save_path = "results/advanced_model.pth"
-    torch.save(model.state_dict(), model_save_path)
-    print(f"[Info] Trained model saved to '{model_save_path}'.\n")
-
-    # Plot train vs. val loss
-    plt.figure(figsize=(8,5))
-    plt.plot(range(1, len(train_losses)+1), train_losses, marker='o', label='Train Loss')
-    plt.plot(range(1, len(val_losses)+1),   val_losses,   marker='s', label='Val Loss')
-    plt.title('Advanced CNN Training (Weighted Loss)')
-    plt.xlabel('Epoch')
-    plt.ylabel('Loss')
+    plt.figure()
+    plt.plot(train_losses, '-bx', label='Train Loss')
+    plt.plot(val_losses,   '-rx', label='Val Loss')
+    plt.title("Training vs Validation Loss")
+    plt.xlabel("Epoch")
+    plt.ylabel("Loss")
     plt.legend()
     plt.grid(True)
     plt.show()
 
-    print("[Info] Advanced CNN training completed.\n")
 
-    # Additional summary: Evaluate entire Train & Val sets
-    print("--------------------------------------------------------")
-    print("ADDITIONAL SUMMARY: ADVANCED CNN EVALUATION ON ALL SETS")
-    print("--------------------------------------------------------\n")
+##############################################################################
+# 5) ACCURACY ON FULL SET
+##############################################################################
+@torch.no_grad()
+def compute_full_dataset_accuracy(model, images, labels):
+    """
+    Evaluate model on the entire dataset in one pass.
+    images: shape (N,1,48,48)
+    labels: shape (N,).
+    returns a float in [0..1].
+    """
+    model.eval()
+    outputs = model(images)  # shape (N,7)
+    _, preds = torch.max(outputs, dim=1)
+    correct = (preds == labels).sum().item()
+    total   = labels.size(0)
+    return correct / total
 
-    def evaluate_full_set(model, images, labels):
-        model.eval()
-        with torch.no_grad():
-            outputs = model(images)
-            preds = torch.argmax(outputs, dim=1)
-        y_true = labels.numpy()
-        y_pred = preds.numpy()
+##############################################################################
+# 6) MAIN
+##############################################################################
+def main():
+    """
+    Steps:
+      1) Load train_data.pt, val_data.pt from 'processed_data/'
+      2) Create DataLoaders
+      3) Build advanced CNN with first conv kernel=5, second conv kernel=3, etc.
+      4) Train for 10 epochs, record epoch logs
+      5) Plot final val_acc and train/val loss
+      6) Save model => 'results/advanced_model.pth'
+      7) Print final train, val set accuracy
+    """
+    train_pt = "processed_data/train_data.pt"
+    val_pt   = "processed_data/val_data.pt"
+    test_pt  = "processed_data/test_data.pt"
 
-        acc  = accuracy_score(y_true, y_pred)
-        prec = precision_score(y_true, y_pred, average=None, zero_division=0)
-        rec  = recall_score(y_true, y_pred, average=None, zero_division=0)
-        return acc, prec, rec
+    if not (os.path.exists(train_pt) and os.path.exists(val_pt)):
+        print("[Error] Missing train_data.pt or val_data.pt!")
+        return
 
-    train_acc, _, _ = evaluate_full_set(model, train_images, train_labels)
-    print(f"Train Set -> Accuracy: {train_acc*100:.2f}%")
+    # load
+    print("[Info] Loading training & validation data from .pt ...")
+    train_imgs, train_lbls, label_to_idx = torch.load(train_pt)
+    val_imgs,   val_lbls,   _            = torch.load(val_pt)
 
-    val_acc, _, _ = evaluate_full_set(model, val_images, val_labels)
-    print(f"Val   Set -> Accuracy: {val_acc*100:.2f}%")
+    # create DataLoaders
+    train_ds = TensorDataset(train_imgs, train_lbls)
+    val_ds   = TensorDataset(val_imgs, val_lbls)
+    train_dl = DataLoader(train_ds, batch_size=64, shuffle=True)
+    val_dl   = DataLoader(val_ds,   batch_size=128)
 
-    if test_images is not None:
-        test_acc, _, _ = evaluate_full_set(model, test_images, test_labels)
-        print(f"Test  Set -> Accuracy: {test_acc*100:.2f}%")
+    # init model
+    model = AdvancedEmotionCNN()
+    print("[Info] Created advanced CNN with first conv kernel=5, second=3, etc.\n")
+
+    # train
+    epochs = 10
+    lr     = 0.001
+    print(f"[Info] Training for {epochs} epochs, LR={lr} (Adam).")
+    history = train_model(epochs, lr, model, train_dl, val_dl, optimizer_func=torch.optim.Adam)
+
+    # plot
+    plot_validation_accuracy(history)
+    plot_train_vs_val_loss(history)
+
+    # save
+    os.makedirs("results", exist_ok=True)
+    final_model_path = "results/advanced_model.pth"
+    torch.save(model.state_dict(), final_model_path)
+    print(f"[Info] Saved final model to '{final_model_path}'")
+
+    # final train/val accuracy
+    print("\n[Info] Evaluating entire training/validation sets...")
+    train_acc = compute_full_dataset_accuracy(model, train_imgs, train_lbls)
+    print(f"Train Set -> Accuracy: {train_acc * 100:.2f}%")
+
+    val_acc = compute_full_dataset_accuracy(model, val_imgs, val_lbls)
+    print(f"Val   Set -> Accuracy: {val_acc * 100:.2f}%")
+
+    if os.path.exists(test_pt):
+        print("[Info] test_data.pt found, can evaluate if desired. Done.")
     else:
-        print("[Info] No test set found, skipping test metrics.")
-
-    print("\nEnd of additional summary.\n")
+        print("[Info] No test_data.pt found. Done.\n")
 
 
 if __name__ == "__main__":
