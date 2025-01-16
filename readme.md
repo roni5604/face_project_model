@@ -1,216 +1,220 @@
 
+# **Deep Learning: Facial Expression Recognition Project**  
+**By Roni Michaeli, Beni Tibi, and Amit Kabalo**  
+**Ariel University**
 
-## ** Installation, Running, and Output**
+---
 
-### **1. Overview**
+## **Overview**
 
-This repository contains a **Facial Expression Recognition** pipeline that classifies images (or live webcam frames) into seven possible emotions:
+This repository showcases a **facial expression recognition** system using **deep learning**. The system compares **four** main approaches:
+
+1. **Baseline Model**  
+   - Always predicts the most frequent class (no learning).
+2. **Softmax Model**  
+   - A single-layer linear classifier (logistic regression for multiple classes).
+3. **Basic Fully Connected Network (MLP)**  
+   - A simple neural network flattening the image and using fully connected layers.
+4. **Advanced Convolutional Neural Network (CNN)**  
+   - Multiple convolutional blocks (Conv2D, BatchNorm, ReLU, MaxPool, Dropout) for superior performance.
+
+Each model is trained to recognize **7 emotion classes** (angry, disgust, fear, happy, neutral, sad, surprise) from grayscale images sized **48×48**. After training, we demonstrate a **live inference** script where the advanced CNN classifies expressions in **real time** via a webcam feed.
+
+---
+
+## **Purpose**
+
+1. **Educational Goal**  
+   - Illustrate how different neural network architectures perform on the same dataset and conditions, highlighting the evolution from trivial baseline to advanced CNN.
+
+2. **Comparison**  
+   - Evaluate accuracy, precision, recall for each approach.  
+   - Show that the **CNN** typically outperforms simpler models on an image-based problem.
+
+3. **Practical Flow**  
+   - **Data Download** (from Kaggle)  
+   - **Data Preparation** (resize, grayscale, normalization)  
+   - **Training** multiple models  
+   - **Evaluation** (metrics)  
+   - **Live Inference** using the advanced model.
+
+---
+
+## **Dataset**
+
+- **Source**: [Kaggle - Face Expression Recognition Dataset](https://www.kaggle.com/datasets/jonathanoheix/face-expression-recognition-dataset)  
+- Contains 7 categories in subfolders: e.g., `train/angry/`, `train/happy/`, etc.
+- Images are manually split into `train/`, `validation/`, and `test/` subfolders.
+
+---
+
+## **Installation Instructions**
+
+1. **Clone the repository** (or download):
+   ```bash
+   git clone https://github.com/YourUserName/facial_expression_recognition_project.git
+   cd facial_expression_recognition_project
+   ```
+
+2. **(Optional) Create a virtual environment**:
+   ```bash
+   python -m venv venv
+   source venv/bin/activate   # or venv\Scripts\activate on Windows
+   ```
+
+3. **Install required libraries**:
+   ```bash
+   pip install -r requirements.txt
+   ```
+   - This includes **PyTorch**, **NumPy**, **Matplotlib**, **OpenCV**, **scikit-learn**, **kaggle**, etc.
+
+4. **Kaggle Setup** (if you need to download the dataset):
+   - Place your `kaggle.json` credentials in `~/.kaggle/` (Linux/Mac) or `%HOMEPATH%\.kaggle\` (Windows).  
+   - Ensure correct permissions (e.g., `chmod 600 ~/.kaggle/kaggle.json`).
+
+5. **Download dataset** (if required):
+   ```bash
+   python download_dataset.py
+   ```
+   - This will fetch the Face Expression Recognition dataset and unzip it under `data/face-expression-recognition-dataset/`.
+
+6. **Prepare the `.pt` data** (preprocessing):
+   ```bash
+   python dataset_preparation.py
+   ```
+   - Reads raw images from `train/`, `validation/`, `test/`, converts them to **(N,1,48,48)** shape, normalizes, and saves `.pt` files to `processed_data/`.
+
+---
+
+## **Project Structure**
 
 ```
-1) Angry
-2) Disgust
-3) Fear
-4) Happy
-5) Neutral
-6) Sad
-7) Surprise
-```
-
-The project includes:
-
-- **Baseline** model: Always predicts the most frequent class.  
-- **Softmax/Logistic** model: Simple linear approach with cross-entropy.  
-- **Basic NN** (MLP): A fully connected network (one or more hidden layers).  
-- **Advanced CNN**: A convolutional network with multiple conv-pool blocks, dropout, and possibly weight decay.  
-- **Live Inference**: A script that uses the best model in real time with a webcam to detect or classify facial expressions.
-
-### **2. Requirements**
-
-- **Python 3.9+** (tested; versions 3.7+ likely work)
-- **PyTorch** (for building/training/inference)
-- **NumPy**
-- **OpenCV** (for live webcam usage)
-- **Matplotlib** (for plotting)
-- **Scikit-learn** (for classification metrics)
-
-Example environment setup (Mac, Linux, or Windows):
-```bash
-python -m venv venv
-source venv/bin/activate   # or venv\Scripts\activate on Windows
-
-pip install --upgrade pip
-pip install torch torchvision numpy opencv-python matplotlib scikit-learn
-```
-
-### **3. Files and What They Do**
-
-```
-root/
-│
+facial_expression_recognition_project/
+├─ data/
+│   └─ face-expression-recognition-dataset/
+│       └─ images/
+│           ├─ train/
+│           ├─ validation/
+│           └─ test/
+├─ processed_data/
+│   ├─ train_data.pt
+│   ├─ val_data.pt
+│   └─ test_data.pt
+├─ results/
+│   ├─ baseline_results.txt
+│   ├─ softmax_model.pth
+│   ├─ basic_nn_results.txt
+│   └─ advanced_model.pth
+├─ download_dataset.py
+├─ dataset_preparation.py
 ├─ baseline.py
-│   - Implements a naive model that always predicts the most frequent class.
-│
 ├─ softmax.py
-│   - Trains a simple Softmax regression model on flattened 48x48 images.
-│
 ├─ basic_nn.py
-│   - Trains a fully connected (MLP) neural network with one or more hidden layers.
-│
 ├─ advanced_network.py
-│   - Trains a deeper CNN with multiple convolutional layers, dropout, early stopping, etc.
-│   - Produces best results and saves model weights to results/advanced_model.pth
-│
 ├─ live_inference.py
-│   - Runs a live webcam session, detects face (optionally with Haar Cascade),
-│     classifies it using the advanced CNN, draws bounding boxes, displays emotions.
-│
-├─ processed_data/ (folder)
-│   - Contains .pt files (train_data.pt, val_data.pt, test_data.pt) with preprocessed images/labels
-│
-├─ results/ (folder)
-│   - Stores output logs, final models (e.g., advanced_model.pth), classification reports, etc.
-│
-├─ readme.md (this file)
-│
-└─ etc...
+├─ requirements.txt
+└─ readme.md
 ```
-
-### **4. How to Run**
-
-**(A) Dataset Preparation**  
-1. Download or collect your **facial expression dataset** (e.g., 48×48 grayscale).  
-2. Use a script like `dataset_preparation.py` (if available) or your own approach to produce `.pt` files:
-   ```
-   processed_data/train_data.pt
-   processed_data/val_data.pt
-   processed_data/test_data.pt  (optional)
-   ```
-3. Confirm the data shape matches the expected `(#samples, 1, 48, 48)` for images and `(#samples,)` for labels.
-
-**(B) Baseline**  
-```bash
-python baseline.py
-```
-- Loads train/val from `processed_data/`, always predicts “most frequent” class.
-- Prints overall accuracy (e.g., ~25%), sets a reference.
-
-**(C) Softmax**  
-```bash
-python softmax.py
-```
-- Trains a Softmax (logistic) approach, flattens images to 2304 features.
-- Typically yields ~35–40% accuracy.
-
-**(D) Basic NN**  
-```bash
-python basic_nn.py
-```
-- Trains a fully connected MLP.  
-- Usually better than Softmax, e.g., ~42–45% accuracy.
-
-**(E) Advanced CNN**  
-```bash
-python advanced_network.py
-```
-- Trains a convolutional neural network, possibly with weighted cross-entropy, dropout, and early stopping.
-- **Saves** final model to `results/advanced_model.pth`.
-- Achieves the best performance (often ~55–60% or higher accuracy).
-
-**(F) Live Inference**  
-```bash
-python live_inference.py
-```
-- Loads `results/advanced_model.pth`.
-- Opens your webcam (index=0).
-- Detects face with Haar Cascade, classifies emotion, draws bounding box + label.
-- Press **`q`** to quit.
-
-### **5. Desired Output**
-
-- **Console** logs for each training script (loss decreasing, final accuracy, classification reports).
-- A **results** folder with:
-  - `.txt` files containing final metrics (accuracy, confusion matrix).
-  - `advanced_model.pth` (for the advanced CNN).
-- **Live Inference** window showing bounding boxes around your face with emotion labels in real-time.
 
 ---
 
-## ** General Explanations**
+## **Code Explanations**
 
-### **1. Project Explanation**
+1. **`download_dataset.py`**  
+   - Authenticates to Kaggle API and downloads the **Face Expression Recognition Dataset**, unzipping into `data/face-expression-recognition-dataset/`.  
+   - If you already have the dataset, you can skip.
 
-1. **Data**:  
-   - The dataset includes images of faces in grayscale, typically 48×48 pixels, each labeled with one of 7 emotions.  
-   - The scripts load `.pt` files via PyTorch and use them for training/validation.
+2. **`dataset_preparation.py`**  
+   - Reads images from `train/`, `validation/`, `test/` subfolders.  
+   - Applies **transforms**: grayscale, resizing to 48×48, converting to tensor, normalizing to ~[-1..1].  
+   - Saves `train_data.pt`, `val_data.pt`, `test_data.pt` in `processed_data/`.  
+   - These files are loaded by all other scripts, ensuring consistent input shapes and label mappings.
 
-2. **Problem Type**:  
-   - **Multiclass classification** (7 classes).  
-   - The pipeline aims to handle imbalanced data via weighting or other techniques.
+3. **`baseline.py`**  
+   - Computes the **most frequent class** in the training set.  
+   - Always predicts that class for every sample (train/val/test).  
+   - Serves as a minimum reference performance.
 
-3. **Approach**:  
-   - Start from a **baseline** to see minimal performance.  
-   - Move to **Softmax** for a small improvement.  
-   - **Fully connected** network (MLP) adds non-linear capacity.  
-   - **Advanced CNN** leverages convolution for better spatial feature extraction.
+4. **`softmax.py`**  
+   - A **single-layer** logistic regression model with cross-entropy.  
+   - Flattens each 48×48 image to a 2304-element vector → single linear layer → 7 outputs.  
+   - Trains for a specified number of epochs, prints classification metrics.
 
-### **2. Model Summaries**
+5. **`basic_nn.py`**  
+   - A **Fully Connected (MLP)** approach, flattening images but adding 2 hidden layers with ReLU, BN, and Dropout.  
+   - Gains more nonlinearity over softmax, yet does not exploit spatial structure.
 
-1. **Baseline**:  
-   - Always picks the most frequent class.  
-   - Yields ~25% accuracy if “happy” is frequent.
+6. **`advanced_network.py`**  
+   - **Advanced CNN** with multiple **Conv2D** blocks (conv + BN + ReLU + pool + dropout) followed by flatten and fully connected layers.  
+   - Typically yields the best accuracy on image tasks.  
+   - Saves model weights to `results/advanced_model.pth`.
 
-2. **Softmax**:  
-   - Linear model with cross-entropy.  
-   - Flattens images, sees ~35–40% accuracy.  
-   - Underfitting for high-dimensional data.
-
-3. **Basic NN**:  
-   - MLP with hidden layers (e.g., 128 or 256 units, ReLU, dropout).  
-   - Achieves ~42–45% accuracy. Overfits if not carefully regularized.
-
-4. **Advanced CNN**:  
-   - Multiple conv + pool layers, dropout, possibly weighted cross-entropy, early stopping.  
-   - Best results (~55–60% or more).  
-   - Saves final weights in `advanced_model.pth`.
-
-5. **Live Inference**:  
-   - Loads advanced CNN.  
-   - Uses Haar Cascade to detect a face.  
-   - Crop → 48×48 → CNN → bounding box color + label.  
-   - Real-time window with ‘q’ to quit.
-
-### **3. Results Summary**
-
-- **Baseline**: ~25–26%  
-- **Softmax**: ~35–38%  
-- **Basic NN (MLP)**: ~42–45%  
-- **Advanced CNN**: ~55–60%  
-- **Live**: Real-time bounding box and predicted label.  
-- Overfitting is mitigated by dropout and early stopping in advanced model.  
-- Class imbalance (like “disgust”) handled with weighting.
-
-### **4. Conclusion**
-
-- The advanced CNN substantially outperforms simpler methods for facial expressions.  
-- Real-time usage is feasible via webcam, though face detection is still required (Haar Cascade or other approaches).  
-- Potential improvements:
-  - Data augmentation (rotations, flips).  
-  - Batch normalization.  
-  - Transformers or deeper CNN architectures.
+7. **`live_inference.py`**  
+   - Performs **real-time** emotion detection from a webcam feed using the advanced CNN.  
+   - Detects faces with OpenCV’s Haar cascade, resizes to 48×48, passes them into the CNN, draws bounding boxes and labels on the video stream.
 
 ---
 
-## **Appendices**
+## **How to Run the Models**
 
-**A. Code Snippets**  
-1. `baseline.py`: Basic model logic, prints metrics.  
-2. `softmax.py`: Flatten + linear + cross-entropy.  
-3. `basic_nn.py`: MLP with hidden layers, dropout.  
-4. `advanced_network.py`: CNN training with early stopping, weight decay.  
-5. `live_inference.py`: Real-time classification with bounding boxes using Haar Cascade.
+1. **Baseline**  
+   ```bash
+   python baseline.py
+   ```
+   - Logs trivial approach accuracy, saves results to `results/baseline_results.txt`.
 
-**B. References**  
-- PyTorch Documentation: <https://pytorch.org/docs/>  
-- OpenCV Haar Cascades: <https://docs.opencv.org/4.x/db/d28/tutorial_cascade_classifier.html>  
-- CNN Design Patterns: <https://cs231n.github.io/convolutional-networks/>
+2. **Softmax**  
+   ```bash
+   python softmax.py
+   ```
+   - Trains the linear model, saves final state dict as `softmax_model.pth`.
 
+3. **Basic NN (MLP)**  
+   ```bash
+   python basic_nn.py
+   ```
+   - Multi-layer perceptron, logs classification report, saves results in `basic_nn_results.txt`.
+
+4. **Advanced CNN**  
+   ```bash
+   python advanced_network.py
+   ```
+   - Trains the deeper convolutional network, saves best weights to `advanced_model.pth`.
+
+5. **Live Inference**  
+   ```bash
+   python live_inference.py
+   ```
+   - Must have `advanced_model.pth` from the advanced CNN.  
+   - Opens webcam, detects face, classifies expression in real time. Press `q` to quit.
+
+---
+
+## **Contact / Credits**
+
+- **Authors**:  
+  - Roni Michaeli  
+  - Beni Tibi  
+  - Amit Kabalo  
+- **Institution**: *Ariel University*  
+- **Course**: *Deep Learning*
+
+**Kaggle Reference**:  
+[Face Expression Recognition Dataset](https://www.kaggle.com/datasets/jonathanoheix/face-expression-recognition-dataset)
+
+---
+
+## **Future Ideas**
+
+1. **Data Augmentation** (random flips/rotations) to improve generalization.  
+2. **Class Weights** or **oversampling** for underrepresented expressions (e.g., disgust).  
+3. **Transfer Learning** from pretrained networks (like ResNet) for potentially higher accuracy.  
+4. **Hyperparameter Tuning** (learning rate, dropout rates, layer dimensions).
+
+---
+
+## **Conclusion**
+
+This **Deep Learning** project demonstrates the progression from a **baseline** approach to an **advanced CNN** for recognizing facial expressions from images. By comparing each model’s metrics, one can appreciate how convolutional layers significantly improve performance on image-based tasks. The **live inference** script further illustrates practical usage, showing real-time classification from a webcam feed.
+
+**Thank you** for reviewing our project submission! We hope it clearly demonstrates the **end-to-end** pipeline of data preparation, model training, evaluation, and real-time inference.

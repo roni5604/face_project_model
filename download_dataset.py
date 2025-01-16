@@ -1,34 +1,40 @@
 """
-====================================================================================
+=====================================================================================
 FILE: download_dataset.py
 
 PURPOSE:
-  - This file downloads the "Face Expression Recognition Dataset" from Kaggle.
-  - It uses the Kaggle API to authenticate and fetch the dataset, then unzips it
-    into the local directory structure.
+  - Download the "Face Expression Recognition Dataset" (or a similar Kaggle dataset)
+    from Kaggle using the Kaggle API.
+  - Unzip it into a local directory so that other scripts (dataset_preparation.py)
+    can then read and prepare the data.
 
-MAIN STEPS:
-  1. Authenticate with Kaggle API.
-  2. Specify the dataset to download ("jonathanoheix/face-expression-recognition-dataset").
-  3. Create a local folder named 'data/face-expression-recognition-dataset/'.
-  4. Download and unzip the dataset into that folder.
+PREREQUISITES:
+  - Kaggle credentials (kaggle.json) properly configured in ~/.kaggle/.
+  - 'kaggle' Python package installed (pip install kaggle).
 
-EXPECTED RESULT:
-  - The folder 'data/face-expression-recognition-dataset/' should contain
-    subfolders like 'images', and inside 'images' you should see 'train', 'validation',
-    and possibly 'test'.
+HOW TO RUN:
+  1) python download_dataset.py
+  2) Check data/face-expression-recognition-dataset/ for downloaded files.
 
-IMPLEMENTATION NOTES:
-  - Kaggle credentials (kaggle.json) must be set up in ~/.kaggle/ or environment variables.
-  - If you already have the dataset locally, you can skip this file.
-====================================================================================
+EXPECTED OUTCOME:
+  - A directory "data/face-expression-recognition-dataset/" with images subfolders
+    like 'train/', 'validation/', 'test/' (depending on the dataset structure).
+
+=====================================================================================
 """
 
 import os
 from kaggle.api.kaggle_api_extended import KaggleApi
 
-
 def download_dataset():
+    """
+    Steps:
+      1) Print a banner about the dataset download.
+      2) Authenticate with Kaggle API.
+      3) Download and unzip the dataset "jonathanoheix/face-expression-recognition-dataset".
+      4) Place it inside 'data/face-expression-recognition-dataset/'.
+      5) Print logs about success or any errors.
+    """
     print("========================================================================")
     print("    DOWNLOADING FACIAL EXPRESSION RECOGNITION DATASET FROM KAGGLE      ")
     print("========================================================================\n")
@@ -44,8 +50,6 @@ def download_dataset():
 
     dataset = "jonathanoheix/face-expression-recognition-dataset"
     output_dir = "data/face-expression-recognition-dataset/"
-
-    # Create local output directory if it doesn't exist
     os.makedirs(output_dir, exist_ok=True)
 
     try:
