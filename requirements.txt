@@ -6,3 +6,5 @@ matplotlib
 scikit-learn
 Pillow
 tqdm
+opencv-python
+kaggle
